@@ -319,6 +319,7 @@ public:
 	bool showDirectories;
 	bool showHidden;
 	bool showPhoto;
+	bool multiRow;
 	int showBoxArt;
 	int filenameDisplay;
 	bool animateDsiIcons;
