@@ -96,7 +96,15 @@ static inline u8 *pendingTilesOf(int bank) {
 // Which slot's icon each view bank currently holds (-1 = none). Slots 36 apart share a bank, so a
 // box only draws its icon while it still owns its bank.
 static int viewOwner[ICON_VIEW_BANKS];
-static inline int iconBankFor(int pos) { return gridEnabled() ? ICON_VIEW_BANK(pos) : ICON_GRID_BANK(pos); }
+// Which pool iconUpdate() loads into: -1 = the one in use, 0 = the single row's banks, 1 = the paged
+// views' banks. Set by the main thread while it prepares the icons for the view it is about to switch to.
+volatile int iconPoolOverride = -1;
+// The bank the renderer draws a slot from
+static inline int iconBankAuto(int pos) { return gridEnabled() ? ICON_VIEW_BANK(pos) : ICON_GRID_BANK(pos); }
+static inline int iconBankFor(int pos) {
+	const int pool = iconPoolOverride;
+	return (pool < 0) ? iconBankAuto(pos) : (pool == 1) ? ICON_VIEW_BANK(pos) : ICON_GRID_BANK(pos);
+}
 
 void iconViewForgetAll() {
 	for (int i = 0; i < ICON_VIEW_BANKS; i++) {
@@ -142,9 +150,14 @@ static void convertIconTilesToRaw(u8 *tilesSrc, u8 *tilesNew, bool twl) {
  * any deferred updates. Block moves only -- see pendingTiles above.
  */
 void execDeferredIconUpdates() {
+	// At most this many uploads per vblank. Each unmaps VRAM A-D for the copy, and a whole page
+	// of the multiple rows view queued at once would run on past the end of the blanking interval.
+	int budget = 6;
 	for (int i = 0; i < NDS_ICON_BANK_COUNT; i++) {
 		if (!pendingValid[i])
 			continue;
+		if (budget-- <= 0)
+			return;
 		// Out of blanking: leave the rest queued instead of unmapping VRAM under
 		// the beam. pendingValid keeps them, so they go out on the next vblank.
 		if (!vramSafeToUnmap())
@@ -292,7 +305,7 @@ void loadDeferredIconPalettes() {
 			// is retried on the next vblank rather than tearing this frame.
 			if (!vramSafeToUnmap())
 				return;
-			glLoadPalette(i < 40 ? iconBankFor(i) : ICON_MOVING_BANK, bnriconTile[i].dsi_palette[bnriconPalLine[i]]);
+			glLoadPalette(i < 40 ? iconBankAuto(i) : ICON_MOVING_BANK, bnriconTile[i].dsi_palette[bnriconPalLine[i]]);
 			bnriconPalLoaded[i] = bnriconPalLine[i];
 		}
 	}

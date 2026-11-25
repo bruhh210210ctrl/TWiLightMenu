@@ -73,7 +73,7 @@ TWLSettings::TWLSettings()
 	showHidden = false;
 	showPhoto = true;
 	multiRow = false;
-	multiRowSmall = false;
+	multiRowMode = 1;
 	showBoxArt = 1;
 	filenameDisplay = 0;
 	animateDsiIcons = true;
@@ -269,7 +269,10 @@ void TWLSettings::loadSettings()
 	showHidden = settingsini.GetInt("SRLOADER", "SHOW_HIDDEN", showHidden);
 	showPhoto = settingsini.GetInt("SRLOADER", "SHOW_PHOTO", showPhoto);
 	multiRow = settingsini.GetInt("SRLOADER", "MULTI_ROW", multiRow);
-	multiRowSmall = settingsini.GetInt("SRLOADER", "MULTI_ROW_SMALL", multiRowSmall);
+	multiRowMode = settingsini.GetInt("SRLOADER", "MULTI_ROW_MODE", multiRowMode);
+	if (multiRowMode < 0 || multiRowMode > 2) {
+		multiRowMode = 1;
+	}
 	showBoxArt = settingsini.GetInt("SRLOADER", "SHOW_BOX_ART", showBoxArt);
 	if (!dsiFeatures() && showBoxArt == 2) // Reset to 1 if not in DSi mode
 		showBoxArt = 1;
@@ -460,7 +463,7 @@ void TWLSettings::saveSettings()
 	settingsini.SetInt("SRLOADER", "SHOW_HIDDEN", showHidden);
 	settingsini.SetInt("SRLOADER", "SHOW_PHOTO", showPhoto);
 	settingsini.SetInt("SRLOADER", "MULTI_ROW", multiRow);
-	settingsini.SetInt("SRLOADER", "MULTI_ROW_SMALL", multiRowSmall);
+	settingsini.SetInt("SRLOADER", "MULTI_ROW_MODE", multiRowMode);
 	settingsini.SetInt("SRLOADER", "SHOW_BOX_ART", showBoxArt);
 	settingsini.SetInt("SRLOADER", "FILENAME_DISPLAY", filenameDisplay);
 	settingsini.SetInt("SRLOADER", "ANIMATE_DSI_ICONS", animateDsiIcons);

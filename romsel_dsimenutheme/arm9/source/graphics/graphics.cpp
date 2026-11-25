@@ -749,10 +749,16 @@ void vBlankHandler() {
 			if (showdialogbox && dbox_Ypos == -192) {
 				// Reload the dialog box palettes here...
 				reloadDboxPalette();
+				vblankRefreshCounter = 0;
 			} else if (!showdialogbox) {
-				reloadIconPalettes();
+				// A few banks per vblank: all of them at once does not fit in the blanking interval
+				// once the multiple rows view has its extra banks, and tears the screen
+				if (reloadIconPaletteStep()) {
+					vblankRefreshCounter = 0;
+				}
+			} else {
+				vblankRefreshCounter = 0;
 			}
-			vblankRefreshCounter = 0;
 		}
 	} else {
 		vblankRefreshCounter++;
@@ -1616,29 +1622,42 @@ void vBlankHandler() {
 			// }
 		}
 
-		if (gridEnabled() && dbox_Ypos == -192 && !applaunchprep) {
-			// Large / small switch, in the style of the 3DS HOME Menu: two squares in a pill, the
-			// one for the layout in use lit
-			const bool small = gridIsSmall();
-			const u16 pillEdge = RGB15(12, 14, 17), pillBack = RGB15(26, 28, 30);
-			const u16 lit = RGB15(13, 23, 31), dim = RGB15(21, 23, 26);
-			const u16 glyphLit = RGB15(31, 31, 31), glyphDim = RGB15(11, 13, 16);
-			const int bx = GRID_BUTTON_X, by = GRID_BUTTON_Y, bw = GRID_BUTTON_W, bh = GRID_BUTTON_H;
-			glBoxFilled(bx, by, bx + bw - 1, by + bh - 1, pillEdge);
-			glBoxFilled(bx + 1, by + 1, bx + bw - 2, by + bh - 2, pillBack);
-			// Left square: large boxes. Right square: small boxes.
-			const int segW = (bw - 6) / 2, segH = bh - 4;
-			const int lx = bx + 2, rx = bx + bw - 2 - segW, sy = by + 2;
-			glBoxFilled(lx, sy, lx + segW - 1, sy + segH - 1, small ? dim : lit);
-			glBoxFilled(rx, sy, rx + segW - 1, sy + segH - 1, small ? lit : dim);
-			const u16 gl = small ? glyphDim : glyphLit, gr = small ? glyphLit : glyphDim;
-			// One big square
-			glBoxFilled(lx + (segW / 2) - 4, sy + (segH / 2) - 4, lx + (segW / 2) + 3, sy + (segH / 2) + 3, gl);
-			// 2 x 2 dots
-			for (int dy = 0; dy < 2; dy++) {
-				for (int dx = 0; dx < 2; dx++) {
-					const int x = rx + (segW / 2) - 4 + (dx * 5), y = sy + (segH / 2) - 4 + (dy * 5);
-					glBoxFilled(x, y, x + 2, y + 2, gr);
+		if (gridFeature() && dbox_Ypos == -192 && !applaunchprep) {
+			// View button in the top right corner, drawn like the corner tabs of the 3DS HOME Menu: a
+			// light tab with a square for each view (single row, double row, grid), the current one lit
+			const int mode = ms().multiRowMode;
+			const u16 tabBack = RGB15(30, 30, 29), tabShadow = RGB15(23, 23, 25);
+			const u16 segOff = RGB15(31, 31, 31), segOn = RGB15(18, 23, 29);
+			const u16 glyphOff = RGB15(16, 19, 24), glyphOn = RGB15(31, 31, 31);
+			// Rounded rectangle: corners cut by two pixels
+			auto rrect = [](int x, int y, int w, int h, u16 color) {
+				glBoxFilled(x + 2, y, x + w - 3, y + h - 1, color);
+				glBoxFilled(x + 1, y + 1, x + w - 2, y + h - 2, color);
+				glBoxFilled(x, y + 2, x + w - 1, y + h - 3, color);
+			};
+			// The tab hangs from the top of the screen, so its top corners are off screen
+			rrect(GRID_BUTTON_X - 1, -6, GRID_BUTTON_W + 1, GRID_BUTTON_H + 6, tabShadow);
+			rrect(GRID_BUTTON_X, -6, GRID_BUTTON_W, GRID_BUTTON_H + 5, tabBack);
+			for (int m = 0; m < 3; m++) {
+				const int sx = GRID_BUTTON_X + 2 + (m * 14), sy = 4;	// Squares 12 wide, 18 tall
+				const bool on = (m == mode);
+				rrect(sx, sy, 12, 18, on ? segOn : segOff);
+				const u16 g = on ? glyphOn : glyphOff;
+				if (m == 0) {
+					// One long row
+					glBoxFilled(sx + 2, sy + 6, sx + 9, sy + 11, g);
+				} else if (m == 1) {
+					// Two rows
+					glBoxFilled(sx + 2, sy + 3, sx + 9, sy + 6, g);
+					glBoxFilled(sx + 2, sy + 11, sx + 9, sy + 14, g);
+				} else {
+					// Grid of dots
+					for (int r = 0; r < 3; r++) {
+						for (int c = 0; c < 2; c++) {
+							const int x = sx + 2 + (c * 5), y = sy + 2 + (r * 5);
+							glBoxFilled(x, y, x + 2, y + 2, g);
+						}
+					}
 				}
 			}
 			glColor(RGB15(31, 31, 31));

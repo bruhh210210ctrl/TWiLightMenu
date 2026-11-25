@@ -3,14 +3,14 @@
 
 // "Multiple rows" view for the 3DS theme.
 //
-// The bottom screen shows pages of boxes, like the 3DS HOME Menu. There are two sizes, switched
-// with the button at the bottom of the screen (or SELECT):
-//   large: 3 x 2 boxes per page
-//   small: 6 x 3 boxes per page
-// Left/Right move one box and carry on onto the next page in the same row (the pages slide
-// across with an eased scroll), Up/Down change row. Tapping a box selects it, tapping the
-// selected box opens it. It is switched on in the settings ("Multiple rows"); with it off
-// nothing here is used and the menu behaves as before.
+// A button in the top right corner of the bottom screen (or SELECT) steps through three views:
+//   single: the normal row of boxes (nothing here is used)
+//   double: pages of 3 x 2 boxes
+//   grid:   pages of 6 x 3 boxes
+// In the paged views Left/Right move one box and carry on onto the next page in the same row (the
+// pages slide across with an eased scroll), Up/Down change row. Tapping a box selects it, tapping
+// the selected box opens it. The button exists when "Multiple rows" is on in the settings; with it
+// off nothing here is used and the menu behaves as before.
 //
 // Everything that moves is stepped once per rendered frame by gridStep(), which the renderer calls,
 // so it stays smooth even while the main thread is busy reading the card.
@@ -32,9 +32,11 @@ int gridBoxScale(const GridLayout &l);
 const GridLayout &gridLayout(bool small);
 const GridLayout &gridCurrentLayout();
 
-// True while the grid view is in use
+// True if the button is available (the "Multiple rows" setting, on the 3DS theme)
+bool gridFeature();
+// True while a paged view (double or grid) is showing
 bool gridEnabled();
-// True if the small layout is the one being shown (the layout the next frame will draw)
+// True if the small layout (the grid view) is the one being shown
 bool gridIsSmall();
 
 // Slots per page, and the page of a slot in the current layout
@@ -65,8 +67,11 @@ bool gridCellPos(int slot, int *x, int *y);
 int gridSlotAt(int px, int py);
 
 // ---- Large / small switch ----
-// Starts the zoom between layouts; cursorSlot is the selected slot, whose page the new layout opens on.
-// No effect while one is already running.
+// The view the next press of the button goes to (0 single, 1 double, 2 grid)
+int gridNextMode();
+// Starts the change to the next view, with a zoom; cursorSlot is the selected slot, whose page the new
+// layout opens on. Going from single to double the mode changes at once, going from grid to single it
+// changes half way through. No effect while one is already running.
 void gridToggleSize(int cursorSlot);
 bool gridToggling();
 // Whole-grid zoom factor (20.12); 1 << 12 when not animating. Zoomed about GRID_ZOOM_CX/CY.
@@ -75,10 +80,10 @@ int gridZoom();
 #define GRID_ZOOM_CY 102
 
 // The button: where it is on screen and whether a touch at (px, py) is on it
-#define GRID_BUTTON_X 106
-#define GRID_BUTTON_Y 173
+#define GRID_BUTTON_X 212
+#define GRID_BUTTON_Y 0
 #define GRID_BUTTON_W 44
-#define GRID_BUTTON_H 17
+#define GRID_BUTTON_H 26
 bool gridButtonHit(int px, int py);
 
 // Advances scrolling and zoom by one frame. Call once per rendered frame.

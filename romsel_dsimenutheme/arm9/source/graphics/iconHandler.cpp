@@ -175,9 +175,32 @@ void glReloadIconPalette(int num) {
  * Reloads all the palettes in the palette cache if
  * they have been corrupted.
  */
+// Palette reloads per call of reloadIconPaletteStep(). Each unmaps VRAM E/F/G while it copies, and
+// the multiple rows view has many more banks than the blanking interval has time for.
+#define PALETTE_RELOADS_PER_STEP 8
+static int paletteRepairNext = 0;
+
+bool reloadIconPaletteStep() {
+	int done = 0;
+	while (done < PALETTE_RELOADS_PER_STEP && paletteRepairNext < iconBanksInUse) {
+		glReloadIconPalette(paletteRepairNext++);
+		done++;
+	}
+	if (paletteRepairNext >= iconBanksInUse) {
+		paletteRepairNext = 0;
+		return true;
+	}
+	return false;
+}
+
+// Everything at once, from the main thread: waits for a vblank between batches
 void reloadIconPalettes() {
-	for (int i = 0; i < iconBanksInUse; i++) {
-		glReloadIconPalette(i);
+	for (int i = 0; i < iconBanksInUse; i += PALETTE_RELOADS_PER_STEP) {
+		if (i > 0 || !vramSafeToUnmap())
+			swiWaitForVBlank();
+		for (int j = i; j < iconBanksInUse && j < i + PALETTE_RELOADS_PER_STEP; j++) {
+			glReloadIconPalette(j);
+		}
 	}
 }
 /**
@@ -212,7 +235,7 @@ void iconManagerInit() {
 	tex().loadIconUnknownTexture();
 
 	// Allocate texture memory for the icon banks.
-	iconBanksInUse = gridEnabled() ? NDS_ICON_BANK_COUNT : ICON_VIEW_BASE;
+	iconBanksInUse = gridFeature() ? NDS_ICON_BANK_COUNT : ICON_VIEW_BASE;
 	glGenTextures(iconBanksInUse, _iconTexID);
 
 	// Initialize empty data for each bank.

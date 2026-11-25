@@ -12,11 +12,15 @@ const GridLayout &gridLayout(bool small) { return small ? smallLayout : largeLay
 const GridLayout &gridCurrentLayout() { return gridLayout(gridIsSmall()); }
 int gridBoxScale(const GridLayout &l) { return (l.box << 12) / 64; }
 
-bool gridEnabled() {
+bool gridFeature() {
 	return ms().multiRow && ms().theme == TWLSettings::ETheme3DS && !ms().macroMode;
 }
 
-bool gridIsSmall() { return ms().multiRowSmall; }
+bool gridEnabled() { return gridFeature() && ms().multiRowMode != 0; }
+
+bool gridIsSmall() { return ms().multiRowMode == 2; }
+
+int gridNextMode() { return (ms().multiRowMode + 1) % 3; }
 
 int gridPerPage() {
 	const GridLayout &l = gridCurrentLayout();
@@ -142,10 +146,20 @@ int gridSlotAt(int px, int py) {
 
 static int toggleFrame = 0;		// 0 = not running
 static int toggleCursor = 0;
+static int toggleTo = 1;		// The mode being changed to
 
 void gridToggleSize(int cursorSlot) {
-	if (toggleFrame == 0) {
-		toggleCursor = cursorSlot;
+	if (toggleFrame != 0) {
+		return;
+	}
+	toggleCursor = cursorSlot;
+	toggleTo = gridNextMode();
+	if (ms().multiRowMode == 0) {
+		// From the single row: the paged view is there straight away and zooms in
+		ms().multiRowMode = toggleTo;
+		gridShowSlot(cursorSlot, true);
+		toggleFrame = (TOGGLE_FRAMES / 2) + 1;
+	} else {
 		toggleFrame = 1;
 	}
 }
@@ -193,8 +207,13 @@ void gridStep() {
 	if (toggleFrame != 0) {
 		if (toggleFrame == TOGGLE_FRAMES / 2) {
 			// Smallest point: swap the layout and put the cursor's page in view
-			ms().multiRowSmall = !ms().multiRowSmall;
+			ms().multiRowMode = toggleTo;
 			gridShowSlot(toggleCursor, true);
+			if (toggleTo == 0) {
+				// Back to the single row: nothing more to animate
+				toggleFrame = 0;
+				return;
+			}
 		}
 		toggleFrame++;
 		if (toggleFrame > TOGGLE_FRAMES) {

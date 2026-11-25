@@ -320,7 +320,7 @@ public:
 	bool showHidden;
 	bool showPhoto;
 	bool multiRow;
-	bool multiRowSmall;
+	int multiRowMode;	// 0 = single row, 1 = double row (3x2 boxes), 2 = grid (6x3 boxes)
 	int showBoxArt;
 	int filenameDisplay;
 	bool animateDsiIcons;

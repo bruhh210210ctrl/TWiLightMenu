@@ -116,3 +116,10 @@ void glReloadIconPalette(int num);
  * they have been corrupted.
  */
 void reloadIconPalettes();
+
+/**
+ * One step of the periodic palette repair: reloads a few banks' palettes (each reload unmaps
+ * VRAM E/F/G for a moment, so only a handful fit in the vblank) and carries on from there
+ * next time. Returns true once every bank has been done and the cycle starts over.
+ */
+bool reloadIconPaletteStep();

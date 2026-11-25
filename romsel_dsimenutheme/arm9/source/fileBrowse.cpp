@@ -519,10 +519,12 @@ void displayNowLoading(void) {
 static void refreshGridIcons(const std::vector<DirEntry> &entries, int centre, bool waitVBlank) {
 	int first = std::max(centre - ICON_GRID_MAX_OFFSET, 0);
 	int last = std::min(centre + ICON_GRID_MAX_OFFSET, 39);
-	if (gridEnabled()) {
-		// Multiple rows: the list has changed, so nothing in the view banks can be trusted.
-		// Load the page the cursor is on, and, where the banks allow, the pages beside it.
+	if (gridFeature()) {
+		// The list has changed, so nothing in the paged views' banks can be trusted any more
 		iconViewForgetAll();
+	}
+	if (gridEnabled()) {
+		// Multiple rows: load the page the cursor is on, and, where the banks allow, the pages beside it.
 		gridShowSlot(centre, true);
 		const int perPage = gridPerPage();
 		const int page = gridPageOf(centre);
@@ -3199,17 +3201,36 @@ static bool gridMoveTo(int newPos, const std::vector<DirEntry> &entries) {
 	return true;
 }
 
-// Switches between the large and the small layout with a zoom
+// Steps to the next view (single row -> double row -> grid -> single row). The icons of the view
+// being switched to are loaded first, into their own banks, so they are there when it appears.
 static void gridToggleView(const std::vector<DirEntry> &entries) {
 	if (gridToggling()) {
 		return;
 	}
-	// The icons of the layout we are going to, ready before it appears (a bank holds the same
-	// slot's icon in either layout, so these only add to what is loaded already)
-	const GridLayout &next = gridLayout(!gridIsSmall());
-	const int nextPerPage = next.cols * next.rows;
-	gridLoadPage(entries, CURPOS / nextPerPage, nextPerPage, nextPerPage * 3 <= ICON_VIEW_BANKS);
+	const int from = ms().multiRowMode;
+	const int to = gridNextMode();
+	if (to == 0) {
+		iconPoolOverride = 0;
+		const int first = std::max(CURPOS - ICON_GRID_MAX_OFFSET, 0);
+		const int last = std::min(CURPOS + ICON_GRID_MAX_OFFSET, 39);
+		for (int pos = first; pos <= last; pos++) {
+			const int idx = pos + PAGENUM * 40;
+			if (idx >= file_count || idx >= (int)entries.size())
+				break;
+			iconUpdate(entries[idx].isDirectory, entries[idx].name.c_str(), pos);
+		}
+	} else {
+		if (from == 0) {
+			iconViewForgetAll(); // The list may have been rearranged since these were loaded
+		}
+		iconPoolOverride = 1;
+		const GridLayout &next = gridLayout(to == 2);
+		const int nextPerPage = next.cols * next.rows;
+		gridLoadPage(entries, CURPOS / nextPerPage, nextPerPage, nextPerPage * 3 <= ICON_VIEW_BANKS);
+	}
+	iconPoolOverride = -1;
 	gridToggleSize(CURPOS);
+	bannerTextShown = false; // The title is drawn again (or taken away) for the new view
 	settingsChanged = true;
 	snd().playSelect();
 }
@@ -3219,11 +3240,6 @@ static bool gridInput(const std::vector<DirEntry> &entries, u32 pressed, u32 hel
 	if (gridToggling()) {
 		return false; // Let the zoom finish
 	}
-	if ((pressed & KEY_SELECT) || ((pressed & KEY_TOUCH) && gridButtonHit(touch.px, touch.py))) {
-		gridToggleView(entries);
-		return false;
-	}
-
 	int target = CURPOS;
 	if (held & (KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN)) {
 		const int dir = (held & KEY_LEFT) ? 0 : (held & KEY_RIGHT) ? 1 : (held & KEY_UP) ? 2 : 3;
@@ -3687,6 +3703,27 @@ std::string browseForFile(const std::vector<std::string_view> extensionList) {
 
 			buttonArrowTouched[0] = ((keysHeld() & KEY_TOUCH) && touch.py > 171 && touch.px < 19);
 			buttonArrowTouched[1] = ((keysHeld() & KEY_TOUCH) && touch.py > 171 && touch.px > 236);
+
+			// The view button (top right corner) or SELECT. The touch is used up, so that nothing
+			// underneath the button reacts to it as well.
+			if (gridFeature() && !gridToggling() &&
+			    ((pressed & KEY_SELECT) || ((pressed & KEY_TOUCH) && gridButtonHit(touch.px, touch.py)))) {
+				gridToggleView(dirContents[scrn]);
+				pressed &= ~(KEY_SELECT | KEY_TOUCH);
+				held &= ~(KEY_SELECT | KEY_TOUCH);
+			}
+
+			// A view change finished (the mode changes inside the renderer): tidy up after it
+			static bool pagedViewWasOn = false;
+			if (gridEnabled() != pagedViewWasOn) {
+				pagedViewWasOn = gridEnabled();
+				bannerTextShown = false;
+				if (!pagedViewWasOn) {
+					// Back to the single row: the carousel is put where the cursor is
+					titleboxXdest[ms().secondaryDevice] = titleboxXpos[ms().secondaryDevice] = CURPOS * titleboxXspacing;
+					titlewindowXdest[ms().secondaryDevice] = titlewindowXpos[ms().secondaryDevice] = CURPOS * 5;
+				}
+			}
 
 			if (gridEnabled()) {
 				// Multiple rows view (3DS theme)
@@ -4594,7 +4631,7 @@ std::string browseForFile(const std::vector<std::string_view> extensionList) {
 				} else
 
 				// Exit to system menu by touching corner button
-				if ((pressed & KEY_TOUCH) && touch.py >= 0 && touch.py <= 26 && touch.px >= 212 && touch.px <= 255 && !sys().isRegularDS()) {
+				if ((pressed & KEY_TOUCH) && touch.py >= 0 && touch.py <= 26 && touch.px >= 212 && touch.px <= 255 && !sys().isRegularDS() && !gridFeature()) {
 					exitToSystemMenu();
 				} else
 

@@ -29,6 +29,9 @@ void iconUpdate(bool isDir, const char* name, int num);
 // Multiple rows view: forget which slot each icon bank holds (call when the list changes), and
 // whether a slot's icon is currently loaded in its bank.
 void iconViewForgetAll();
+
+// Which bank pool iconUpdate() loads into: -1 = the one in use, 0 = single row, 1 = paged views.
+extern volatile int iconPoolOverride;
 bool iconViewReady(int slot);
 void titleUpdate(bool isDir, std::string_view name, int num);
 void drawIcon(int Xpos, int Ypos, int num);

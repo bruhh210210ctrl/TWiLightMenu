@@ -129,7 +129,7 @@ STRING(DESCRIPTION_SHOW_EMPTY_BOXES, "Show empty box slots in the Nintendo DSi, 
 STRING(DESCRIPTION_DIRECTORIES_1, "If you're in a folder where most of your games are, it is safe to hide directories/folders.")
 STRING(DESCRIPTION_SHOW_HIDDEN_1, "If turned on, whether an app is set to hidden or not will be ignored and it will be displayed anyways.")
 STRING(DESCRIPTION_PREVENT_ROM_DELETION_1, "When turned on, ROM hiding/deletion is disabled. Also note this prevents un-hiding as well.")
-STRING(DESCRIPTION_MULTI_ROW, "Show apps in a grid of several rows on the bottom screen of the Nintendo 3DS UI, like the 3DS HOME Menu. Up/Down move between rows, and moving apps with Up is not available while this is on.")
+STRING(DESCRIPTION_MULTI_ROW, "Adds a button in the top right corner of the Nintendo 3DS UI (or press SELECT) that switches between a single row, two rows and a grid of apps, like the 3DS HOME Menu. Moving apps with Up is only available in the single row.")
 STRING(DESCRIPTION_SHOW_PHOTO, "Show photos and screenshots on the top screen of the Nintendo DSi/3DS UIs. This setting may be forcefully disabled in some themes.")
 STRING(DESCRIPTION_BOXART, "Show box art on the top screen of the Nintendo DSi/3DS UIs.")
 STRING(DESCRIPTION_BOXART_DSI, "Show box art on the top screen of the Nintendo DSi/3DS UIs. Caching allows smoother scrolling at the cost of slower ROM list loading.")
