@@ -25,8 +25,15 @@
 
 void getGameInfo(bool isDir, const char* name, int num, bool fromArgv = false);
 void iconUpdate(bool isDir, const char* name, int num);
+
+// Multiple rows view: forget which slot each icon bank holds (call when the list changes), and
+// whether a slot's icon is currently loaded in its bank.
+void iconViewForgetAll();
+bool iconViewReady(int slot);
 void titleUpdate(bool isDir, std::string_view name, int num);
 void drawIcon(int Xpos, int Ypos, int num);
+// Multiple rows view: the slot's icon at a scale (20.12, 1 << 12 = normal)
+void drawIconScaled(int Xpos, int Ypos, int num, int scale);
 void execDeferredIconUpdates();
 void loadDeferredIconPalettes();
 void writeBannerText(std::string_view name, std::string_view text);

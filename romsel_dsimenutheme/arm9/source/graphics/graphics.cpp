@@ -1047,6 +1047,17 @@ void vBlankHandler() {
 		updateFrame = true;
 	}
 
+	if (gridEnabled()) {
+		// Eased page scroll and the large/small zoom move every frame, here in the renderer,
+		// so they stay smooth even while the main thread is busy with the card
+		const int scrollBefore = gridScroll;
+		const bool zoomedBefore = gridToggling();
+		gridStep();
+		if (scrollBefore != gridScroll || zoomedBefore || gridToggling()) {
+			updateFrame = true;
+		}
+	}
+
 	if (applaunchprep && titleboxYmovepos < 192) {
 		titleboxYmovepos += 5;
 		updateFrame = true;
@@ -1100,7 +1111,7 @@ void vBlankHandler() {
 		// Playback animated icons
 		for (int i = 0; i < ((movingApp != -1) ? 41 : 40); i++) {
 			if (bnriconisDSi[i] && playBannerSequence(i) && !updateFrame) {
-				updateFrame = gridEnabled() ? (i >= gridFirstSlot() && i < gridFirstSlot() + GRID_VISIBLE) : (displayGameIcons && (ms().theme != TWLSettings::EThemeSaturn)) ? ((i >= CURPOS-ICON_GRID_MAX_OFFSET && i <= CURPOS+ICON_GRID_MAX_OFFSET) || i == 40) : (i == CURPOS);
+				updateFrame = gridEnabled() ? false : (displayGameIcons && (ms().theme != TWLSettings::EThemeSaturn)) ? ((i >= CURPOS-ICON_GRID_MAX_OFFSET && i <= CURPOS+ICON_GRID_MAX_OFFSET) || i == 40) : (i == CURPOS);
 			}
 		}
 	}
@@ -1257,7 +1268,6 @@ void vBlankHandler() {
 			// alias onto one bank (see ICON_GRID_BANKS in iconHandler.h).
 			static_assert(2 * ICON_GRID_MAX_OFFSET + 1 <= ICON_GRID_BANKS,
 					  "icon grid draws more boxes than it has texture banks");
-			static_assert(GRID_VISIBLE <= ICON_GRID_BANKS, "the multiple rows view shows more boxes than there are icon banks");
 			const bool gridMode = gridEnabled();
 			int maxIconNumber = (ms().theme == TWLSettings::EThemeSaturn ? 0 : ICON_GRID_MAX_OFFSET);
 			for (int pos = std::max(CURPOS - maxIconNumber, 0); pos <= (gridMode ? -1 : std::min(CURPOS + maxIconNumber, 39)); pos++) {
@@ -1373,8 +1383,29 @@ void vBlankHandler() {
 			}
 
 			if (gridMode) {
-				// Multiple rows: GRID_COLS x GRID_ROWS boxes, starting at gridFirstSlot()
-				for (int slot = gridFirstSlot(); slot < gridFirstSlot() + GRID_VISIBLE && slot <= 39; slot++) {
+				// Multiple rows: pages of boxes, scrolled sideways, in the large or small layout.
+				// zoom is the whole-grid scale while the size switch animates (1.0 otherwise).
+				const GridLayout &L = gridCurrentLayout();
+				const int zoom = gridZoom();
+				const int boxScale = gridBoxScale(L);			// Layout scale of the box graphics
+				const int fullScale = (boxScale * zoom) >> 12;		// ... and with the zoom
+				const bool scaled = (fullScale != (1 << 12));
+				const bool iconScaled = (zoom != (1 << 12));
+				auto zx = [&](int x) { return GRID_ZOOM_CX + (((x - GRID_ZOOM_CX) * zoom) >> 12); };
+				auto zy = [&](int y) { return GRID_ZOOM_CY + (((y - GRID_ZOOM_CY) * zoom) >> 12); };
+				auto lay = [&](int v) { return (v * boxScale) >> 12; };		// Pixels of the 64 pixel graphics, in this layout
+				// Draws a box graphic whose top left is at (x, y) in layout pixels
+				auto boxSprite = [&](int x, int y, int flip, const glImage *img) {
+					if (scaled) {
+						glSpriteScale(zx(x), zy(y), fullScale, flip, img);
+					} else {
+						glSprite(zx(x), zy(y), flip, img);
+					}
+				};
+
+				int firstSlot, lastSlot;
+				gridVisibleSlots(&firstSlot, &lastSlot);
+				for (int slot = firstSlot; slot <= lastSlot && slot <= 39; slot++) {
 					int bx, by;
 					if (!gridCellPos(slot, &bx, &by)) {
 						continue;
@@ -1382,27 +1413,28 @@ void vBlankHandler() {
 					if (ms().hideEmptyBoxes && slot != 0 && slot >= spawnedtitleboxes) {
 						continue;
 					}
-					const int ix = bx + 16;			// Icon inset inside the 64px box
-					const int iy = by + iconYposOnTitleBox;
+					const int ix = bx + L.iconX;			// Icon inside the box
+					const int iy = by + L.iconY;
 					if (slot < spawnedtitleboxes) {
 						if (isDirectory[slot]) {
-							glSprite(bx, by, GL_FLIP_NONE, tex().folderImage());
+							boxSprite(bx, by, GL_FLIP_NONE, tex().folderImage());
 							if (customIcon[slot])
-								drawIcon(ix, iy, slot);
+								drawIconScaled(zx(ix), zy(iy), slot, zoom);
 						} else if (giftActive(slot)) {
-							glSprite(bx + giftShakeX(slot), by, GL_FLIP_NONE, &tex().giftImage()[giftSpriteFrame(slot)]);
+							boxSprite(bx + lay(giftShakeX(slot)), by, GL_FLIP_NONE, &tex().giftImage()[giftSpriteFrame(slot)]);
 						} else if (!applaunchprep || CURPOS != slot) {
 							if (bnrSysSettings[slot]) {
-								glSprite(bx, by - 1, GL_FLIP_NONE, &tex().settingsImage()[1]);
+								boxSprite(bx, by - lay(1), GL_FLIP_NONE, &tex().settingsImage()[1]);
 							} else {
-								glSprite(bx, by, GL_FLIP_NONE, tex().boxfullImage());
-								drawIcon(ix, iy, slot);
+								boxSprite(bx, by, GL_FLIP_NONE, tex().boxfullImage());
+								drawIconScaled(zx(ix), zy(iy), slot, zoom);
 							}
 						}
 					} else {
-						glSprite(bx, by, GL_FLIP_NONE, tex().boxemptyImage());
+						boxSprite(bx, by, GL_FLIP_NONE, tex().boxemptyImage());
 					}
 				}
+				(void)iconScaled;
 			}
 
 			if (movingApp != -1) {
@@ -1509,8 +1541,10 @@ void vBlankHandler() {
 			if (gridEnabled()) {
 				int cx, cy;
 				if (gridCellPos(CURPOS, &cx, &cy)) {
-					launchDX = cx - 96;
-					launchDY = cy - 96;
+					// Lifts off from the middle of its box, whatever size the box was
+					const int half = gridCurrentLayout().box / 2;
+					launchDX = (cx + half - 32) - 96;
+					launchDY = (cy + half - 32) - 96;
 				}
 			}
 			if (isDirectory[CURPOS]) {
@@ -1530,24 +1564,39 @@ void vBlankHandler() {
 			dots().drawAuto();
 		}
 		if (showSTARTborder && displayGameIcons && (ms().theme < 4)) {
-			// In the multiple rows view the border sits on the selected box
+			// In the multiple rows view the border sits on the selected box, at the box's size
 			int borderX = 96, borderY = tc().startBorderRenderY();
+			int borderScale = 1 << 12;
+			int borderOffX = 0, borderOffY = 0;	// Placement of the second half and the wireless icon, scaled
 			if (gridEnabled()) {
 				int cx, cy;
 				if (gridCellPos(CURPOS, &cx, &cy)) {
-					borderX = cx;
-					borderY = cy + (tc().startBorderRenderY() - tc().titleboxRenderY());
+					const GridLayout &L = gridCurrentLayout();
+					const int zoom = gridZoom();
+					const int boxScale = gridBoxScale(L);
+					borderScale = (boxScale * zoom) >> 12;
+					const int dy = ((tc().startBorderRenderY() - tc().titleboxRenderY()) * boxScale) >> 12;
+					borderX = GRID_ZOOM_CX + (((cx - GRID_ZOOM_CX) * zoom) >> 12);
+					borderY = GRID_ZOOM_CY + (((cy + dy - GRID_ZOOM_CY) * zoom) >> 12);
 				}
 			}
-			glSprite(borderX, borderY, GL_FLIP_NONE,
-				 &tex().startbrdImage()[startBorderZoomAnimSeq[startBorderZoomAnimNum] &
-							(tc().startBorderSpriteH() - 1)]);
-			glSprite(borderX + tc().startBorderSpriteW(), borderY, GL_FLIP_H,
-				 &tex().startbrdImage()[startBorderZoomAnimSeq[startBorderZoomAnimNum] &
-							(tc().startBorderSpriteH() - 1)]);
-			if (bnrWirelessIcon[CURPOS] > 0)
-				glSprite(borderX, borderY, GL_FLIP_NONE,
-					 &tex().wirelessIcons()[(bnrWirelessIcon[CURPOS] - 1) & 31]);
+			borderOffX = (tc().startBorderSpriteW() * borderScale) >> 12;
+			(void)borderOffY;
+			const glImage *borderImg = &tex().startbrdImage()[startBorderZoomAnimSeq[startBorderZoomAnimNum] &
+									(tc().startBorderSpriteH() - 1)];
+			if (borderScale == (1 << 12)) {
+				glSprite(borderX, borderY, GL_FLIP_NONE, borderImg);
+				glSprite(borderX + borderOffX, borderY, GL_FLIP_H, borderImg);
+				if (bnrWirelessIcon[CURPOS] > 0)
+					glSprite(borderX, borderY, GL_FLIP_NONE,
+						 &tex().wirelessIcons()[(bnrWirelessIcon[CURPOS] - 1) & 31]);
+			} else {
+				glSpriteScale(borderX, borderY, borderScale, GL_FLIP_NONE, borderImg);
+				glSpriteScale(borderX + borderOffX, borderY, borderScale, GL_FLIP_H, borderImg);
+				if (bnrWirelessIcon[CURPOS] > 0)
+					glSpriteScale(borderX, borderY, borderScale, GL_FLIP_NONE,
+						 &tex().wirelessIcons()[(bnrWirelessIcon[CURPOS] - 1) & 31]);
+			}
 
 			if (currentBg == 1 && tc().playStopSound() && needToPlayStopSound &&
 				waitForNeedToPlayStopSound == 0) {
@@ -1565,6 +1614,34 @@ void vBlankHandler() {
 				// tc().startBorderRenderY(), GL_FLIP_NONE,
 				// 		 &tex().wirelessIcons()[(bnrWirelessIcon[CURPOS] - 1) & 31]);
 			// }
+		}
+
+		if (gridEnabled() && dbox_Ypos == -192 && !applaunchprep) {
+			// Large / small switch, in the style of the 3DS HOME Menu: two squares in a pill, the
+			// one for the layout in use lit
+			const bool small = gridIsSmall();
+			const u16 pillEdge = RGB15(12, 14, 17), pillBack = RGB15(26, 28, 30);
+			const u16 lit = RGB15(13, 23, 31), dim = RGB15(21, 23, 26);
+			const u16 glyphLit = RGB15(31, 31, 31), glyphDim = RGB15(11, 13, 16);
+			const int bx = GRID_BUTTON_X, by = GRID_BUTTON_Y, bw = GRID_BUTTON_W, bh = GRID_BUTTON_H;
+			glBoxFilled(bx, by, bx + bw - 1, by + bh - 1, pillEdge);
+			glBoxFilled(bx + 1, by + 1, bx + bw - 2, by + bh - 2, pillBack);
+			// Left square: large boxes. Right square: small boxes.
+			const int segW = (bw - 6) / 2, segH = bh - 4;
+			const int lx = bx + 2, rx = bx + bw - 2 - segW, sy = by + 2;
+			glBoxFilled(lx, sy, lx + segW - 1, sy + segH - 1, small ? dim : lit);
+			glBoxFilled(rx, sy, rx + segW - 1, sy + segH - 1, small ? lit : dim);
+			const u16 gl = small ? glyphDim : glyphLit, gr = small ? glyphLit : glyphDim;
+			// One big square
+			glBoxFilled(lx + (segW / 2) - 4, sy + (segH / 2) - 4, lx + (segW / 2) + 3, sy + (segH / 2) + 3, gl);
+			// 2 x 2 dots
+			for (int dy = 0; dy < 2; dy++) {
+				for (int dx = 0; dx < 2; dx++) {
+					const int x = rx + (segW / 2) - 4 + (dx * 5), y = sy + (segH / 2) - 4 + (dy * 5);
+					glBoxFilled(x, y, x + 2, y + 2, gr);
+				}
+			}
+			glColor(RGB15(31, 31, 31));
 		}
 
 		// Refresh the background layer.

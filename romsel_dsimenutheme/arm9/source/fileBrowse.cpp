@@ -520,10 +520,15 @@ static void refreshGridIcons(const std::vector<DirEntry> &entries, int centre, b
 	int first = std::max(centre - ICON_GRID_MAX_OFFSET, 0);
 	int last = std::min(centre + ICON_GRID_MAX_OFFSET, 39);
 	if (gridEnabled()) {
-		// Multiple rows: load the boxes that are on screen, with the cursor's row in view
-		gridEnsureVisible(centre);
-		first = gridFirstSlot();
-		last = std::min(first + GRID_VISIBLE - 1, 39);
+		// Multiple rows: the list has changed, so nothing in the view banks can be trusted.
+		// Load the page the cursor is on, and, where the banks allow, the pages beside it.
+		iconViewForgetAll();
+		gridShowSlot(centre, true);
+		const int perPage = gridPerPage();
+		const int page = gridPageOf(centre);
+		const bool neighbours = (perPage * 3 <= ICON_VIEW_BANKS);
+		first = std::max(page - (neighbours ? 1 : 0), 0) * perPage;
+		last = std::min(((page + (neighbours ? 1 : 0) + 1) * perPage) - 1, 39);
 	}
 
 	for (int pos = first; pos <= last; pos++) {
@@ -3144,36 +3149,42 @@ static void endMoveMode(SwitchState scrn, std::vector<std::vector<DirEntry>> &di
 
 // ---- Multiple rows view (3DS theme), see grid.h ----
 
-// Puts the cursor on newPos, scrolling the grid by a row if needed, and loads the icons of
-// the boxes that scroll into view. Returns true if the cursor moved.
+// Loads the icons of every box on a page (of perPage boxes) that is not already in its bank.
+// With neighbours, the pages either side as well, so that paging to them is instant.
+static void gridLoadPage(const std::vector<DirEntry> &entries, int page, int perPage, bool neighbours) {
+	const int firstPage = std::max(page - (neighbours ? 1 : 0), 0);
+	const int lastPage = page + (neighbours ? 1 : 0);
+	for (int pos = firstPage * perPage; pos < (lastPage + 1) * perPage && pos <= 39; pos++) {
+		if (iconViewReady(pos)) {
+			continue;
+		}
+		const int idx = pos + PAGENUM * 40;
+		if (idx >= file_count || idx >= (int)entries.size()) {
+			break;
+		}
+		iconUpdate(entries[idx].isDirectory, entries[idx].name.c_str(), pos);
+	}
+}
+
+// Puts the cursor on newPos. If that is on another page, the icons of that page are loaded and
+// the pages slide across (the renderer eases the scroll). Returns true if the cursor moved.
 static bool gridMoveTo(int newPos, const std::vector<DirEntry> &entries) {
 	newPos = std::clamp(newPos, 0, last_used_box);
 	if (newPos == CURPOS) {
 		return false;
 	}
 
-	const int oldTop = gridTopRow;
+	const int oldPage = gridPageOf(CURPOS);
 	CURPOS = newPos;
 	waitForNeedToPlayStopSound = 1;
 	settingsChanged = true;
 	bannerTextShown = false; // The loop writes the new name
 
-	gridEnsureVisible(CURPOS);
-	if (gridTopRow != oldTop) {
-		// Only the boxes that were not on screen before need their icon read
-		const int oldFirst = oldTop * GRID_COLS;
-		const int newFirst = gridFirstSlot();
-		for (int pos = newFirst; pos < newFirst + GRID_VISIBLE && pos <= 39; pos++) {
-			if (pos >= oldFirst && pos < oldFirst + GRID_VISIBLE) {
-				continue;
-			}
-			const int idx = pos + PAGENUM * 40;
-			if (idx >= file_count || idx >= (int)entries.size()) {
-				break;
-			}
-			iconUpdate(entries[idx].isDirectory, entries[idx].name.c_str(), pos);
-		}
+	if (gridPageOf(CURPOS) != oldPage) {
+		const int perPage = gridPerPage();
+		gridLoadPage(entries, gridPageOf(CURPOS), perPage, perPage * 3 <= ICON_VIEW_BANKS);
 	}
+	gridShowSlot(CURPOS, false);
 
 	// Same top screen handling as moveCursor(): drop the old box art, the new one loads in the loop
 	if (boxArtLoaded) {
@@ -3188,21 +3199,35 @@ static bool gridMoveTo(int newPos, const std::vector<DirEntry> &entries) {
 	return true;
 }
 
+// Switches between the large and the small layout with a zoom
+static void gridToggleView(const std::vector<DirEntry> &entries) {
+	if (gridToggling()) {
+		return;
+	}
+	// The icons of the layout we are going to, ready before it appears (a bank holds the same
+	// slot's icon in either layout, so these only add to what is loaded already)
+	const GridLayout &next = gridLayout(!gridIsSmall());
+	const int nextPerPage = next.cols * next.rows;
+	gridLoadPage(entries, CURPOS / nextPerPage, nextPerPage, nextPerPage * 3 <= ICON_VIEW_BANKS);
+	gridToggleSize(CURPOS);
+	settingsChanged = true;
+	snd().playSelect();
+}
+
 // Keys and stylus for the grid. Returns true if the selection changed.
 static bool gridInput(const std::vector<DirEntry> &entries, u32 pressed, u32 held, const touchPosition &touch, bool &gameTapped) {
+	if (gridToggling()) {
+		return false; // Let the zoom finish
+	}
+	if ((pressed & KEY_SELECT) || ((pressed & KEY_TOUCH) && gridButtonHit(touch.px, touch.py))) {
+		gridToggleView(entries);
+		return false;
+	}
+
 	int target = CURPOS;
-	if (held & KEY_LEFT) {
-		target = CURPOS - 1;
-	} else if (held & KEY_RIGHT) {
-		target = CURPOS + 1;
-	} else if (held & KEY_UP) {
-		target = CURPOS - GRID_COLS;
-	} else if (held & KEY_DOWN) {
-		target = CURPOS + GRID_COLS;
-		// Going down into a row that is not full lands on its last box
-		if (target > last_used_box && (CURPOS / GRID_COLS) < (last_used_box / GRID_COLS)) {
-			target = last_used_box;
-		}
+	if (held & (KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN)) {
+		const int dir = (held & KEY_LEFT) ? 0 : (held & KEY_RIGHT) ? 1 : (held & KEY_UP) ? 2 : 3;
+		target = gridNeighbour(CURPOS, dir, last_used_box, gridIsSmall());
 	} else if (pressed & KEY_TOUCH) {
 		const int slot = gridSlotAt(touch.px, touch.py);
 		if (slot >= 0 && slot <= last_used_box) {
@@ -3211,6 +3236,8 @@ static bool gridInput(const std::vector<DirEntry> &entries, u32 pressed, u32 hel
 				return false;
 			}
 			target = slot;
+		} else {
+			return false;
 		}
 	} else {
 		return false;

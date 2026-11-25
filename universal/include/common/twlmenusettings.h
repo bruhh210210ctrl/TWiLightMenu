@@ -320,6 +320,7 @@ public:
 	bool showHidden;
 	bool showPhoto;
 	bool multiRow;
+	bool multiRowSmall;
 	int showBoxArt;
 	int filenameDisplay;
 	bool animateDsiIcons;

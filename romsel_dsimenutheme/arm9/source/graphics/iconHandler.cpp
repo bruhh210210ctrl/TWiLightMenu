@@ -2,6 +2,7 @@
 #include "ThemeTextures.h"
 #include "common/twlmenusettings.h"
 #include "common/logging.h"
+#include "../grid.h"
 #include <gl2d.h>
 #include <ctype.h>
 #include <nds.h>
@@ -9,6 +10,7 @@
 #include <sys/stat.h>
 
 bool initialized;
+static int iconBanksInUse = ICON_VIEW_BASE;	// The view banks exist only while the multiple rows view is on
 
 static int _iconTexID[NDS_ICON_BANK_COUNT];
 static u16 _paletteCache[NDS_ICON_BANK_COUNT][16];
@@ -174,7 +176,7 @@ void glReloadIconPalette(int num) {
  * they have been corrupted.
  */
 void reloadIconPalettes() {
-	for (int i = 0; i < NDS_ICON_BANK_COUNT; i++) {
+	for (int i = 0; i < iconBanksInUse; i++) {
 		glReloadIconPalette(i);
 	}
 }
@@ -210,12 +212,13 @@ void iconManagerInit() {
 	tex().loadIconUnknownTexture();
 
 	// Allocate texture memory for the icon banks.
-	glGenTextures(NDS_ICON_BANK_COUNT, _iconTexID);
+	iconBanksInUse = gridEnabled() ? NDS_ICON_BANK_COUNT : ICON_VIEW_BASE;
+	glGenTextures(iconBanksInUse, _iconTexID);
 
 	// Initialize empty data for each bank.
-	for (int i = 0; i < NDS_ICON_BANK_COUNT; i++) {
+	for (int i = 0; i < iconBanksInUse; i++) {
 		glLoadIcon(i, tex().iconUnknownTexture()->palette(), tex().iconUnknownTexture()->bytes(),
-			   TWL_TEX_HEIGHT, true);
+			   IS_VIEW_BANK(i) ? 32 : TWL_TEX_HEIGHT, true);
 	}
 
 	// Safe to log here: main thread, and this is where VRAM exhaustion would first

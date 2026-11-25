@@ -23,7 +23,16 @@
 // Dedicated bank for the app being dragged in move mode (cache MOVING_APP_SLOT).
 #define ICON_MOVING_BANK ICON_GRID_BANKS
 
-#define NDS_ICON_BANK_COUNT (ICON_GRID_BANKS + 1)
+// Banks for the multiple rows view (grid.h): one static 32x32 icon per slot, ring-mapped, so a
+// whole page of the small layout (and the one sliding in next to it) can be held at once.
+// Only allocated when that view is on. Each is 512 bytes, not 4 KB, because the view
+// shows the first frame of animated icons only.
+#define ICON_VIEW_BASE (ICON_GRID_BANKS + 1)
+#define ICON_VIEW_BANKS 36
+#define ICON_VIEW_BANK(pos) (ICON_VIEW_BASE + ((pos) % ICON_VIEW_BANKS))
+#define IS_VIEW_BANK(b) ((b) >= ICON_VIEW_BASE)
+
+#define NDS_ICON_BANK_COUNT (ICON_VIEW_BASE + ICON_VIEW_BANKS)
 
 // Maps a list position (0..39) to the bank holding its icon. Every load site
 // and every draw site must agree on this one expression.

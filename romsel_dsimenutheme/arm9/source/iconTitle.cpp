@@ -86,7 +86,27 @@ static u32 arm9StartSig[4];
 // bank within one frame collapse into a single upload, and that no pointer into
 // bnriconTile[] is held across the IRQ boundary -- the previous queue stored the
 // source pointer and the main thread could overwrite it before the handler ran.
-static u8 pendingTiles[NDS_ICON_BANK_COUNT][(32 * 256) / 2] = {0};
+static u8 pendingTiles[ICON_VIEW_BASE][(32 * 256) / 2] = {0};
+// The multiple rows view banks only ever hold a static 32x32 icon
+static u8 pendingViewTiles[ICON_VIEW_BANKS][(32 * 32) / 2] = {0};
+static inline u8 *pendingTilesOf(int bank) {
+	return IS_VIEW_BANK(bank) ? pendingViewTiles[bank - ICON_VIEW_BASE] : pendingTiles[bank];
+}
+
+// Which slot's icon each view bank currently holds (-1 = none). Slots 36 apart share a bank, so a
+// box only draws its icon while it still owns its bank.
+static int viewOwner[ICON_VIEW_BANKS];
+static inline int iconBankFor(int pos) { return gridEnabled() ? ICON_VIEW_BANK(pos) : ICON_GRID_BANK(pos); }
+
+void iconViewForgetAll() {
+	for (int i = 0; i < ICON_VIEW_BANKS; i++) {
+		viewOwner[i] = -1;
+	}
+}
+
+bool iconViewReady(int slot) {
+	return slot >= 0 && slot < 40 && viewOwner[slot % ICON_VIEW_BANKS] == slot;
+}
 static u16 pendingPalette[NDS_ICON_BANK_COUNT][16] = {0};
 static bool pendingTwl[NDS_ICON_BANK_COUNT] = {false};
 static volatile bool pendingValid[NDS_ICON_BANK_COUNT] = {false};
@@ -130,7 +150,7 @@ void execDeferredIconUpdates() {
 		if (!vramSafeToUnmap())
 			return;
 		pendingValid[i] = false;
-		glLoadIcon(i, pendingPalette[i], pendingTiles[i], pendingTwl[i] ? TWL_TEX_HEIGHT : 32);
+		glLoadIcon(i, pendingPalette[i], pendingTilesOf(i), pendingTwl[i] ? TWL_TEX_HEIGHT : 32);
 		bankLoaded[i] = true;
 	}
 }
@@ -146,6 +166,8 @@ void execDeferredIconUpdates() {
 static void stageConverted(int num, const u16 *palette, const u8 *tiles, int texHeight = 32) {
 	if (BAD_ICON_IDX(num))
 		return;
+	if (IS_VIEW_BANK(num))
+		texHeight = 32; // Static icon only
 
 	const size_t tileBytes = (32 * texHeight) / 2;
 	const bool twl = (texHeight == TWL_TEX_HEIGHT);
@@ -157,14 +179,14 @@ static void stageConverted(int num, const u16 *palette, const u8 *tiles, int tex
 	// comparison against what was last staged for this bank, not a guess from an
 	// index that could go stale, so it cannot leave a wrong icon on screen.
 	if (bankLoaded[num] && pendingTwl[num] == twl
-			&& memcmp(pendingTiles[num], tiles, tileBytes) == 0
+			&& memcmp(pendingTilesOf(num), tiles, tileBytes) == 0
 			&& memcmp(pendingPalette[num], palette, sizeof(pendingPalette[num])) == 0)
 		return;
 
 	// Drop the slot before touching the buffer, so a vblank arriving mid-copy skips
 	// this bank rather than uploading half of it. It gets picked up next frame.
 	pendingValid[num] = false;
-	tonccpy(pendingTiles[num], tiles, tileBytes);
+	tonccpy(pendingTilesOf(num), tiles, tileBytes);
 	tonccpy(pendingPalette[num], palette, sizeof(pendingPalette[num]));
 	pendingTwl[num] = twl;
 
@@ -176,7 +198,7 @@ static void stageConverted(int num, const u16 *palette, const u8 *tiles, int tex
 		// frame per icon in bgOperations(true), so yielding here costs nothing.
 		if (!vramSafeToUnmap())
 			swiWaitForVBlank();
-		glLoadIcon(num, pendingPalette[num], pendingTiles[num], texHeight);
+		glLoadIcon(num, pendingPalette[num], pendingTilesOf(num), texHeight);
 		bankLoaded[num] = true;
 	}
 }
@@ -185,6 +207,8 @@ static void stageConverted(int num, const u16 *palette, const u8 *tiles, int tex
 void loadIcon(u8 *tilesSrc, u16 *palSrc, int num, bool twl) {
 	if (BAD_ICON_IDX(num))
 		return;
+	if (IS_VIEW_BANK(num))
+		twl = false; // First frame only
 	convertIconTilesToRaw(tilesSrc, convertScratch, twl);
 	stageConverted(num, palSrc, convertScratch, twl ? TWL_TEX_HEIGHT : 32);
 }
@@ -239,10 +263,25 @@ void drawIcon(int Xpos, int Ypos, int num) {
 			bnriconPalLoaded[40] = -1; // defer loading the palette
 		}
 	} else {
+		if (gridEnabled()) {
+			// Static icon in its own bank; nothing to animate or re-palette. Without an icon yet
+			// (the page is still being loaded) the box is drawn empty rather than with another's icon.
+			if (iconViewReady(num))
+				glSprite(Xpos, Ypos, bannerFlip[num], &getIcon(ICON_VIEW_BANK(num))[0]);
+			return;
+		}
 		glSprite(Xpos, Ypos, bannerFlip[num], &getIcon(ICON_GRID_BANK(num))[bnriconframenumY[num]]);
 		if (bnriconPalLine[num] != bnriconPalLoaded[num]) {
 			bnriconPalLoaded[num] = -1; // defer loading the palette
 		}
+	}
+}
+
+void drawIconScaled(int Xpos, int Ypos, int num, int scale) {
+	if (scale == (1 << 12)) {
+		drawIcon(Xpos, Ypos, num);
+	} else if (iconViewReady(num)) {
+		glSpriteScale(Xpos, Ypos, scale, bannerFlip[num], &getIcon(ICON_VIEW_BANK(num))[0]);
 	}
 }
 
@@ -253,7 +292,7 @@ void loadDeferredIconPalettes() {
 			// is retried on the next vblank rather than tearing this frame.
 			if (!vramSafeToUnmap())
 				return;
-			glLoadPalette(i < 40 ? ICON_GRID_BANK(i) : ICON_MOVING_BANK, bnriconTile[i].dsi_palette[bnriconPalLine[i]]);
+			glLoadPalette(i < 40 ? iconBankFor(i) : ICON_MOVING_BANK, bnriconTile[i].dsi_palette[bnriconPalLine[i]]);
 			bnriconPalLoaded[i] = bnriconPalLine[i];
 		}
 	}
@@ -838,7 +877,11 @@ void iconUpdate(bool isDir, const char *name, int num) {
 	logPrint("iconUpdate: ");
 
 	const int listIdx = num; // -1 for the moving app, else the 0..39 grid position
-	const int spriteIdx = (num == -1) ? ICON_MOVING_BANK : ICON_GRID_BANK(num);
+	const int spriteIdx = (num == -1) ? ICON_MOVING_BANK : iconBankFor(num);
+	if (IS_VIEW_BANK(spriteIdx))
+		viewOwner[spriteIdx - ICON_VIEW_BASE] = num;
+	// The view banks hold a static icon, so always use the first palette of an animated one
+	const bool staticIcon = IS_VIEW_BANK(spriteIdx);
 	if (num == -1)
 		num = 40;
 
@@ -851,7 +894,7 @@ void iconUpdate(bool isDir, const char *name, int num) {
 			loadUnkIcon(spriteIdx);
 		} else if (bnriconisDSi[num]) {
 			logPrint("Custom icon found!");
-			loadIcon(ndsBanner.dsi_icon[0], ndsBanner.dsi_palette[bnriconPalLine[num]], spriteIdx, true);
+			loadIcon(ndsBanner.dsi_icon[0], ndsBanner.dsi_palette[staticIcon ? 0 : bnriconPalLine[num]], spriteIdx, true);
 			bnriconPalLoaded[num] = bnriconPalLine[num];
 		} else {
 			logPrint("Custom icon found!");
@@ -927,7 +970,7 @@ void iconUpdate(bool isDir, const char *name, int num) {
 		logPrint("NDS icon found!");
 		sNDSBannerExt &ndsBanner = bnriconTile[num];
 		if (bnriconisDSi[num]) {
-			loadIcon(ndsBanner.dsi_icon[0], ndsBanner.dsi_palette[bnriconPalLine[num]], spriteIdx, true);
+			loadIcon(ndsBanner.dsi_icon[0], ndsBanner.dsi_palette[staticIcon ? 0 : bnriconPalLine[num]], spriteIdx, true);
 			bnriconPalLoaded[num] = bnriconPalLine[num];
 		} else {
 			loadIcon(ndsBanner.icon, ndsBanner.palette, spriteIdx, false);
@@ -1137,8 +1180,7 @@ static inline std::u16string splitLongDialogTitle(std::string_view text) {
 void titleUpdate(bool isDir, std::string_view name, int num) {
 	const bool theme_showdialogbox = (showdialogbox || (ms().theme == TWLSettings::EThemeSaturn && currentBg == 1) || (ms().theme == TWLSettings::EThemeHBL && dbox_showIcon));
 	if (gridEnabled() && !theme_showdialogbox) {
-		gridWriteTitle(isDir, name); // Multiple rows: the name goes under the grid, there is no title bubble
-		return;
+		return; // Multiple rows: no name text (box art goes on the top screen), and no title bubble
 	}
 	if (isDir) {
 		if (theme_showdialogbox) {

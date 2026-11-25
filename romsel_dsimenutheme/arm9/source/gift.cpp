@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <set>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -130,20 +131,21 @@ void giftFinishUnwrap(int slot, const std::string &name) {
 // Spinning gift on the top screen
 // ---------------------------------------------------------------------------
 
+static unsigned short spinColors[256];	// RGB555 | BIT(15)
+static unsigned char spinAlphas[256];
+
 void giftComposite(unsigned short *dst, const unsigned short *bg, const unsigned char *frame,
 		int w, int h, const unsigned short *colorTable) {
-	const unsigned short *colors = (const unsigned short *)frame;
-	const unsigned char *alphas = frame + (w * h * 2);
 	for (int y = 0; y < h; y++) {
 		for (int x = 0; x < w; x++) {
-			const int i = (y * w) + x;
 			const int o = (y * 256) + x;
-			const unsigned char a = alphas[i];
-			if (a == 0) {
+			const unsigned char index = frame[(y * w) + x];
+			if (index == 0) {
 				dst[o] = bg[o];
 				continue;
 			}
-			unsigned short color = colors[i] | BIT(15);
+			const unsigned char a = spinAlphas[index];
+			unsigned short color = spinColors[index];
 			if (colorTable) {
 				color = colorTable[color % 0x8000] | BIT(15);
 			}
@@ -155,13 +157,67 @@ void giftComposite(unsigned short *dst, const unsigned short *bg, const unsigned
 static FILE *spinFile = NULL;
 static int spinFrame = 0;
 static int spinTick = 0;
-static unsigned char spinBuffer[GIFT_SPIN_FRAME_BYTES] __attribute__((aligned(4)));
+static int spinIdle = 0;			// Calls since the gift was last wanted
+
+// Every frame, once read. NULL if there was not enough memory, in which case frames are
+// streamed from the card through spinSingle instead.
+static unsigned char *spinCache = NULL;
+static unsigned int spinCached = 0;		// Bit per frame in spinCache
+static bool spinCacheTried = false;
+static unsigned char spinSingle[GIFT_SPIN_FRAME_BYTES] __attribute__((aligned(4)));
+
+// After this many calls without a wanted gift the cache is given back (5 seconds)
+#define GIFT_SPIN_KEEP_CALLS 300
 
 static void spinClose(void) {
 	if (spinFile) {
 		fclose(spinFile);
 		spinFile = NULL;
 	}
+}
+
+static void spinFreeCache(void) {
+	if (spinCache) {
+		free(spinCache);
+		spinCache = NULL;
+	}
+	spinCached = 0;
+	spinCacheTried = false;
+}
+
+// Reads the colour table; returns false if the file is not usable
+static bool spinReadHeader(void) {
+	unsigned char header[GIFT_SPIN_HEADER_BYTES];
+	if (fseek(spinFile, 0, SEEK_SET) != 0 || fread(header, 1, sizeof(header), spinFile) != sizeof(header)) {
+		return false;
+	}
+	for (int i = 0; i < 256; i++) {
+		spinColors[i] = (unsigned short)(header[i * 2] | (header[(i * 2) + 1] << 8)) | BIT(15);
+		spinAlphas[i] = header[512 + i];
+	}
+	return true;
+}
+
+// Returns a pointer to the pixels of frame k, reading it from the card if it is not cached.
+// NULL if the card could not be read.
+static const unsigned char *spinGetFrame(int k) {
+	unsigned char *dst;
+	if (spinCache) {
+		dst = spinCache + ((size_t)k * GIFT_SPIN_FRAME_BYTES);
+		if (spinCached & (1u << k)) {
+			return dst;
+		}
+	} else {
+		dst = spinSingle;
+	}
+	if (fseek(spinFile, (long)GIFT_SPIN_HEADER_BYTES + ((long)k * GIFT_SPIN_FRAME_BYTES), SEEK_SET) != 0 ||
+	    fread(dst, 1, GIFT_SPIN_FRAME_BYTES, spinFile) != (size_t)GIFT_SPIN_FRAME_BYTES) {
+		return NULL;
+	}
+	if (spinCache) {
+		spinCached |= (1u << k);
+	}
+	return dst;
 }
 
 bool giftSpinUpdate(bool wanted) {
@@ -175,8 +231,12 @@ bool giftSpinUpdate(bool wanted) {
 			}
 			boxArtLoaded = false;
 		}
+		if (spinCache && ++spinIdle > GIFT_SPIN_KEEP_CALLS) {
+			spinFreeCache();
+		}
 		return false;
 	}
+	spinIdle = 0;
 
 	// (Re)start when we have no file open, or the top screen was cleared under us
 	// (for example the cursor moved away and back)
@@ -187,22 +247,35 @@ bool giftSpinUpdate(bool wanted) {
 		if (!spinFile) {
 			return false; // No animation data: fall back to normal box art
 		}
+		if (!spinReadHeader()) {
+			spinClose();
+			return false;
+		}
+		if (!spinCache && !spinCacheTried) {
+			spinCacheTried = true;
+			spinCache = (unsigned char *)malloc((size_t)GIFT_SPIN_FRAMES * GIFT_SPIN_FRAME_BYTES);
+			spinCached = 0;
+		}
 		spinFrame = 0;
 		spinTick = 0;
 	} else {
 		if (++spinTick < GIFT_SPIN_TICKS) {
+			// Between frames: read the next one ahead of time so that showing it costs nothing
+			if (spinCache && spinTick == 1) {
+				spinGetFrame((spinFrame + 1) % GIFT_SPIN_FRAMES);
+			}
 			return true;
 		}
 		spinTick = 0;
 		spinFrame = (spinFrame + 1) % GIFT_SPIN_FRAMES;
 	}
 
-	if (fseek(spinFile, (long)spinFrame * GIFT_SPIN_FRAME_BYTES, SEEK_SET) != 0 ||
-	    fread(spinBuffer, 1, GIFT_SPIN_FRAME_BYTES, spinFile) != (size_t)GIFT_SPIN_FRAME_BYTES) {
+	const unsigned char *pixels = spinGetFrame(spinFrame);
+	if (!pixels) {
 		spinClose();
 		return false;
 	}
-	tex().drawGiftSpinFrame(spinBuffer, restart);
+	tex().drawGiftSpinFrame(pixels, restart);
 	boxArtLoaded = true;
 	return true;
 }

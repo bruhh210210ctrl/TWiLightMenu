@@ -45,15 +45,20 @@ void giftFinishUnwrap(int slot, const std::string &name);
 
 // ---- Spinning 3D gift on the top screen (3DS theme) ----
 // While a wrapped gift is selected, a short turntable animation of a gift box plays where
-// the box art normally goes. Frames are stored in nitro:/graphics/giftspin.bin, one after
-// the other: per frame W*H RGB555 pixels (little endian) followed by W*H alpha bytes.
+// the box art normally goes. The data is in nitro:/graphics/giftspin8.bin:
+//   256 x u16  colour table (RGB555, little endian); entry 0 is unused
+//   256 x u8   alpha of each table entry (0..255)
+//   then GIFT_SPIN_FRAMES frames of W*H bytes, each byte an index into the table (0 = transparent)
+// Frames are kept in RAM once they have been read, so the animation does not touch the SD card
+// after the first turn (an SD read that stalls used to freeze the menu for a moment).
 #define GIFT_SPIN_W 112
 #define GIFT_SPIN_H 112
 #define GIFT_SPIN_FRAMES 24			// 7.5 degrees apart, covering a half turn (the gift looks the same after that)
 #define GIFT_SPIN_TICKS 4			// Screen frames per animation frame
-#define GIFT_SPIN_FRAME_BYTES (GIFT_SPIN_W * GIFT_SPIN_H * 3)
+#define GIFT_SPIN_FRAME_BYTES (GIFT_SPIN_W * GIFT_SPIN_H)
+#define GIFT_SPIN_HEADER_BYTES (256 * 2 + 256)
 #ifndef GIFT_SPIN_PATH
-#define GIFT_SPIN_PATH "nitro:/graphics/giftspin.bin"
+#define GIFT_SPIN_PATH "nitro:/graphics/giftspin8.bin"
 #endif
 
 // Call once per screen frame. wanted = a wrapped gift is selected right now.
@@ -61,8 +66,8 @@ void giftFinishUnwrap(int slot, const std::string &name);
 // in which case the caller should skip drawing normal box art.
 bool giftSpinUpdate(bool wanted);
 
-// Draws one frame (w x h) over bg into dst. dst and bg are 256 pixels wide.
-// Transparent pixels show bg, partly transparent ones are blended with it.
+// Draws one frame (w x h bytes of colour table indices, see above) over bg into dst. dst and bg are
+// 256 pixels wide. Transparent pixels show bg, partly transparent ones are blended with it.
 void giftComposite(unsigned short *dst, const unsigned short *bg, const unsigned char *frame,
 		int w, int h, const unsigned short *colorTable);
 
